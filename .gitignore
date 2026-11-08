@@ -1,0 +1,8 @@
+.vagrant/
+keys/*
+!keys/.gitkeep
+*.retry
+*.log
+*.swp
+*.vdi
+*.vmdk
