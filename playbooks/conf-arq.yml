@@ -1,0 +1,200 @@
+---
+- name: Instalar e configurar DHCP, DNS, LVM e NFS
+  hosts: arq
+  become: true
+
+  handlers:
+    - name: reiniciar bind9
+      ansible.builtin.service:
+        name: bind9
+        state: restarted
+
+    - name: reiniciar dhcp
+      ansible.builtin.service:
+        name: isc-dhcp-server
+        state: restarted
+
+    - name: atualizar compartilhamentos nfs
+      ansible.builtin.command: exportfs -ra
+
+  tasks:
+    - name: Instalar pacotes do servidor de arquivos
+      ansible.builtin.apt:
+        name:
+          - bind9
+          - bind9utils
+          - isc-dhcp-server
+          - lvm2
+          - nfs-kernel-server
+        update_cache: true
+        state: present
+
+    - name: Instalar configuracao DHCP
+      ansible.builtin.copy:
+        src: dhcpd.conf
+        dest: /etc/dhcp/dhcpd.conf
+        mode: '0644'
+      notify: reiniciar dhcp
+
+    - name: Validar configuracao DHCP
+      ansible.builtin.command: /usr/sbin/dhcpd -t -cf /etc/dhcp/dhcpd.conf
+      changed_when: false
+
+    - name: Configurar interface do servidor DHCP
+      ansible.builtin.lineinfile:
+        path: /etc/default/isc-dhcp-server
+        regexp: '^INTERFACESv4='
+        line: 'INTERFACESv4="eth1"'
+      notify: reiniciar dhcp
+
+    - name: Instalar opcoes do Bind9
+      ansible.builtin.copy:
+        src: named.conf.options
+        dest: /etc/bind/named.conf.options
+        mode: '0644'
+      notify: reiniciar bind9
+
+    - name: Instalar configuracao das zonas DNS
+      ansible.builtin.copy:
+        src: named.conf.internal-zones
+        dest: /etc/bind/named.conf.internal-zones
+        mode: '0644'
+      notify: reiniciar bind9
+
+    - name: Criar zona DNS direta
+      ansible.builtin.copy:
+        src: andre.devops.db
+        dest: /etc/bind/andre.devops.db
+        mode: '0644'
+      notify: reiniciar bind9
+
+    - name: Criar zona DNS reversa
+      ansible.builtin.copy:
+        src: 56.168.192.db
+        dest: /etc/bind/56.168.192.db
+        mode: '0644'
+      notify: reiniciar bind9
+
+    - name: Incluir zonas DNS no Bind9
+      ansible.builtin.lineinfile:
+        path: /etc/bind/named.conf
+        line: 'include "/etc/bind/named.conf.internal-zones";'
+        state: present
+      notify: reiniciar bind9
+
+    - name: Verificar configuracao do DNS
+      ansible.builtin.command: named-checkconf -z
+      changed_when: false
+
+    - name: Verificar se o Volume Group dados existe
+      ansible.builtin.command: vgs dados
+      register: grupo_dados
+      changed_when: false
+      failed_when: false
+
+    - name: Verificar se os tres discos estao vazios
+      ansible.builtin.command: wipefs -n /dev/sdb /dev/sdc /dev/sdd
+      register: discos
+      changed_when: false
+      when: grupo_dados.rc != 0
+
+    - name: Impedir sobrescrita de discos usados
+      ansible.builtin.assert:
+        that:
+          - discos.stdout | trim == ''
+        fail_msg: Os discos adicionais possuem assinaturas. Verifique-os antes de criar o LVM.
+      when: grupo_dados.rc != 0
+
+    - name: Criar volumes fisicos
+      ansible.builtin.command: pvcreate /dev/sdb /dev/sdc /dev/sdd
+      when: grupo_dados.rc != 0
+
+    - name: Criar Volume Group dados
+      ansible.builtin.command: vgcreate dados /dev/sdb /dev/sdc /dev/sdd
+      when: grupo_dados.rc != 0
+
+    - name: Verificar se o Logical Volume ifpb existe
+      ansible.builtin.command: lvs /dev/dados/ifpb
+      register: volume_ifpb
+      changed_when: false
+      failed_when: false
+
+    - name: Criar Logical Volume ifpb de 15 GB
+      ansible.builtin.command: lvcreate -L 15G -n ifpb dados
+      when: volume_ifpb.rc != 0
+
+    - name: Verificar sistema de arquivos do volume
+      ansible.builtin.command: blkid -s TYPE -o value /dev/dados/ifpb
+      register: formato_ifpb
+      changed_when: false
+      failed_when: false
+
+    - name: Formatar volume ifpb em ext4
+      ansible.builtin.command: mkfs.ext4 /dev/dados/ifpb
+      when: formato_ifpb.stdout | trim == ''
+
+    - name: Criar diretorio de montagem /dados
+      ansible.builtin.file:
+        path: /dados
+        state: directory
+        mode: '0755'
+
+    - name: Configurar montagem automatica do volume
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^/dev/dados/ifpb\s+'
+        line: '/dev/dados/ifpb /dados ext4 defaults,nofail 0 2'
+        state: present
+
+    - name: Verificar se volume ja esta montado
+      ansible.builtin.command: mountpoint -q /dados
+      register: montagem_dados
+      changed_when: false
+      failed_when: false
+
+    - name: Montar volume em /dados
+      ansible.builtin.command: mount /dados
+      when: montagem_dados.rc != 0
+
+    - name: Criar grupo para o NFS
+      ansible.builtin.group:
+        name: nfs-ifpb
+        gid: 1800
+        state: present
+
+    - name: Criar usuario nfs-ifpb sem shell
+      ansible.builtin.user:
+        name: nfs-ifpb
+        uid: 1800
+        group: nfs-ifpb
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    - name: Criar diretorio exportado pelo NFS
+      ansible.builtin.file:
+        path: /dados/nfs
+        state: directory
+        owner: nfs-ifpb
+        group: nfs-ifpb
+        mode: '0700'
+
+    - name: Configurar exportacao NFS
+      ansible.builtin.copy:
+        src: exports
+        dest: /etc/exports
+        mode: '0644'
+      notify: atualizar compartilhamentos nfs
+
+    - name: Habilitar os servicos DNS, DHCP e NFS
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - bind9
+        - isc-dhcp-server
+        - nfs-kernel-server
+
+    - name: Aplicar as alteracoes dos servicos
+      ansible.builtin.meta: flush_handlers

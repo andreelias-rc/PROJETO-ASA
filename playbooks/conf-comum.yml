@@ -1,0 +1,119 @@
+---
+- name: Configuracoes comuns dos servidores
+  hosts: all
+  become: true
+
+  handlers:
+    - name: reiniciar chrony
+      ansible.builtin.service:
+        name: chrony
+        state: restarted
+
+    - name: reiniciar ssh
+      ansible.builtin.service:
+        name: ssh
+        state: restarted
+
+  tasks:
+    - name: Atualizar o sistema
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+
+    - name: Instalar aplicativos comuns
+      ansible.builtin.apt:
+        name:
+          - chrony
+          - openssh-server
+          - sudo
+          - nfs-common
+        state: present
+
+    - name: Copiar configuracao do Chrony
+      ansible.builtin.copy:
+        src: chrony.conf
+        dest: /etc/chrony/chrony.conf
+        mode: '0644'
+      notify: reiniciar chrony
+
+    - name: Verificar o fuso horario
+      ansible.builtin.command: timedatectl show -p Timezone --value
+      register: fuso_atual
+      changed_when: false
+
+    - name: Configurar fuso horario
+      ansible.builtin.command: timedatectl set-timezone America/Recife
+      when: fuso_atual.stdout != 'America/Recife'
+
+    - name: Criar grupo ifpb
+      ansible.builtin.group:
+        name: ifpb
+        state: present
+
+    - name: Criar usuario andre
+      ansible.builtin.user:
+        name: andre
+        shell: /bin/bash
+        groups: ifpb
+        append: true
+        create_home: true
+        state: present
+
+    - name: Criar diretorio SSH do usuario andre
+      ansible.builtin.file:
+        path: /home/andre/.ssh
+        state: directory
+        owner: andre
+        group: andre
+        mode: '0700'
+
+    - name: Copiar chave publica SSH do usuario andre
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../keys/andre_ed25519.pub"
+        dest: /home/andre/.ssh/authorized_keys
+        owner: andre
+        group: andre
+        mode: '0600'
+
+    - name: Habilitar sudo para o grupo ifpb
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/ifpb
+        content: "%ifpb ALL=(ALL:ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: '0440'
+        validate: '/usr/sbin/visudo -cf %s'
+
+    - name: Configurar banner SSH
+      ansible.builtin.copy:
+        dest: /etc/issue.net
+        content: "Acesso apenas para pessoas com autorização expressa!!!\n"
+        mode: '0644'
+
+    - name: Configurar acesso SSH
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/90-devops.conf
+        content: |
+          PubkeyAuthentication yes
+          AuthenticationMethods publickey
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PermitRootLogin no
+          AllowGroups vagrant ifpb
+          Banner /etc/issue.net
+          X11Forwarding {{ 'yes' if inventory_hostname == 'cli' else 'no' }}
+        mode: '0644'
+      notify: reiniciar ssh
+
+    - name: Validar arquivo SSH
+      ansible.builtin.command: /usr/sbin/sshd -t
+      changed_when: false
+
+    - name: Habilitar os servicos SSH e Chrony
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - ssh
+        - chrony

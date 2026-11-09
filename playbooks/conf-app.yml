@@ -1,0 +1,73 @@
+---
+- name: Instalar e configurar Apache2 e autofs
+  hosts: app
+  become: true
+
+  handlers:
+    - name: reiniciar apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
+
+    - name: reiniciar autofs
+      ansible.builtin.service:
+        name: autofs
+        state: restarted
+
+  tasks:
+    - name: Instalar Apache2
+      ansible.builtin.apt:
+        name: apache2
+        update_cache: true
+        state: present
+
+    - name: Copiar pagina inicial
+      ansible.builtin.copy:
+        src: index.html
+        dest: /var/www/html/index.html
+        mode: '0644'
+      notify: reiniciar apache
+
+    - name: Ajustar charset UTF-8
+      ansible.builtin.lineinfile:
+        path: /etc/apache2/conf-enabled/charset.conf
+        regexp: '^#?AddDefaultCharset'
+        line: 'AddDefaultCharset UTF-8'
+      notify: reiniciar apache
+
+    - name: Habilitar Apache2
+      ansible.builtin.service:
+        name: apache2
+        state: started
+        enabled: true
+
+    - name: Instalar autofs
+      ansible.builtin.apt:
+        name: autofs
+        state: present
+
+    - name: Criar diretorio /var/nfs
+      ansible.builtin.file:
+        path: /var/nfs
+        state: directory
+        mode: '0755'
+
+    - name: Copiar configuracao principal do autofs
+      ansible.builtin.copy:
+        src: auto.master
+        dest: /etc/auto.master.d/devops.autofs
+        mode: '0644'
+      notify: reiniciar autofs
+
+    - name: Copiar mapa do autofs
+      ansible.builtin.copy:
+        src: auto.devops
+        dest: /etc/auto.devops
+        mode: '0644'
+      notify: reiniciar autofs
+
+    - name: Habilitar autofs
+      ansible.builtin.service:
+        name: autofs
+        state: started
+        enabled: true

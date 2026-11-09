@@ -1,0 +1,50 @@
+---
+- name: Configurar cliente, SSH X11 e autofs
+  hosts: cli
+  become: true
+
+  handlers:
+    - name: reiniciar autofs
+      ansible.builtin.service:
+        name: autofs
+        state: restarted
+
+  tasks:
+    - name: Instalar Firefox ESR e xauth
+      ansible.builtin.apt:
+        name:
+          - firefox-esr
+          - xauth
+        update_cache: true
+        state: present
+
+    - name: Instalar autofs
+      ansible.builtin.apt:
+        name: autofs
+        state: present
+
+    - name: Criar diretorio /var/nfs
+      ansible.builtin.file:
+        path: /var/nfs
+        state: directory
+        mode: '0755'
+
+    - name: Copiar configuracao principal do autofs
+      ansible.builtin.copy:
+        src: auto.master
+        dest: /etc/auto.master.d/devops.autofs
+        mode: '0644'
+      notify: reiniciar autofs
+
+    - name: Copiar mapa do autofs
+      ansible.builtin.copy:
+        src: auto.devops
+        dest: /etc/auto.devops
+        mode: '0644'
+      notify: reiniciar autofs
+
+    - name: Habilitar autofs
+      ansible.builtin.service:
+        name: autofs
+        state: started
+        enabled: true
