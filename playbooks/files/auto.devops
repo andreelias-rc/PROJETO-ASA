@@ -1,0 +1,1 @@
+/var/nfs -fstype=nfs4,rw,vers=4.1 192.168.56.124:/dados/nfs

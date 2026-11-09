@@ -1,0 +1,1 @@
+/dados/nfs 192.168.56.0/24(rw,sync,no_subtree_check,all_squash,anonuid=1800,anongid=1800)

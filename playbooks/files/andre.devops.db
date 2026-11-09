@@ -1,0 +1,7 @@
+$TTL 86400
+@   IN SOA arq.andre.devops. hostmaster.andre.devops. (
+        2026110701 3600 1800 604800 86400 )
+    IN NS arq.andre.devops.
+arq IN A 192.168.56.124
+db  IN A 192.168.56.125
+app IN A 192.168.56.126

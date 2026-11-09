@@ -1,0 +1,15 @@
+acl internal-network {
+    192.168.56.0/24;
+};
+
+options {
+    directory "/var/cache/bind";
+    listen-on { 127.0.0.1; 192.168.56.124; };
+    listen-on-v6 { none; };
+    allow-query { localhost; internal-network; };
+    allow-recursion { localhost; internal-network; };
+    allow-transfer { none; };
+    recursion yes;
+    dnssec-validation auto;
+    forwarders { 1.1.1.1; 8.8.8.8; };
+};
